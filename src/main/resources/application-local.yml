@@ -1,0 +1,35 @@
+spring:
+  autoconfigure:
+    exclude: org.redisson.spring.starter.RedissonAutoConfigurationV2
+
+  # ── DataSource local ─────────────────────────────────
+  datasource:
+    url: ${DB_URL:${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/terreiro}}
+    username: ${DB_USER:${SPRING_DATASOURCE_USERNAME:app}}
+    password: ${DB_PASSWORD:${SPRING_DATASOURCE_PASSWORD:app}}
+
+  # ── Redis local ──────────────────────────────────────
+  data:
+    redis:
+      url: ${REDIS_URL:${SPRING_DATA_REDIS_URL:redis://localhost:6379}}
+
+# ── JWT (chave de desenvolvimento — NÃO usar em produção) ──
+jwt:
+  secret: ${JWT_SECRET:hxH7krP/zYLQT4eOavvJeDhlRphYD0GoWjvAZf2TqII=}
+  expiration: ${JWT_EXPIRATION:24h}
+
+# ── PII (chaves de desenvolvimento) ───────────────────
+pii:
+  key: ${PII_SECRET_KEY:${PII_KEY:dGVzdC1rZXktZGV2LW9ubHktMzItYnl0ZXMtbG9uZyE=}}
+  hash-salt: ${PII_HASH_SALT:dev-salt-local-only}
+
+# ── SSL desabilitado em dev ───────────────────────────
+server:
+  ssl:
+    enabled: false
+
+# ── Mercado Pago (dev local: mock mode com token vazio) ──
+mp:
+  access-token: ""
+  webhook:
+    secret: dev-webhook-secret-local

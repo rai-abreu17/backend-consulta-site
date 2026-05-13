@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<style>
+  body {
+    font-family: 'Inter', Helvetica, sans-serif;
+    color: #333333;
+    line-height: 1.6;
+    margin: 0;
+    padding: 0;
+    background-color: #f9f9f9;
+  }
+  .container {
+    max-width: 600px;
+    margin: 20px auto;
+    background-color: #ffffff;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .header {
+    background-color: #7A0E14;
+    color: #ffffff;
+    text-align: center;
+    padding: 24px;
+  }
+  .content {
+    padding: 32px;
+  }
+  .success-box {
+    background-color: #d4edda;
+    border-left: 4px solid #28a745;
+    color: #155724;
+    padding: 16px;
+    margin-bottom: 24px;
+    border-radius: 4px;
+  }
+  .footer {
+    background-color: #f1f1f1;
+    color: #666666;
+    text-align: center;
+    padding: 16px;
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1 style="margin: 0; font-size: 24px;">Terreiro de Rei Sebastião</h1>
+  </div>
+  <div class="content">
+    <div class="success-box">
+      <strong>Agendamento Confirmado!</strong> Seu pagamento foi processado com sucesso.
+    </div>
+
+    <p>Olá, <strong><span th:text="${nome_consulente}">Consulente</span></strong>,</p>
+    <p>Seu horário para <strong><span th:text="${nome_servico}">Consulta</span></strong> está garantido.</p>
+    
+    <p><strong>Detalhes do Agendamento:</strong><br>
+    Data e Hora: <span th:text="${data_hora_formatada}">--/--/----</span><br>
+    Modalidade: <span th:text="${modalidade_texto}">ONLINE</span></p>
+
+    <div th:if="${modalidade == 'ONLINE'}" style="margin-top: 20px;">
+      <h3 style="color: #7A0E14;">Instruções para a Consulta Online</h3>
+      <p>No horário agendado, utilize o link abaixo para entrar na sala do atendimento. Procure um ambiente silencioso, com boa conexão à internet, e prepare suas questões com antecedência.</p>
+      <p><strong th:text="${localizacao_titulo}">Link do atendimento</strong>:<br>
+      <a th:href="${localizacao_url}" th:text="${localizacao_valor}" style="color: #7A0E14; font-weight: bold;">https://meet.google.com/...</a></p>
+    </div>
+
+    <div th:if="${modalidade == 'IN_PERSON'}" style="margin-top: 20px;">
+      <h3 style="color: #7A0E14;">Como chegar ao Terreiro</h3>
+      <p>O atendimento será presencial. Por favor, chegue com 10 minutos de antecedência.</p>
+      <p><strong th:text="${localizacao_titulo}">Morada do atendimento</strong>: <span th:text="${localizacao_valor}">Endereço do Terreiro</span><br>
+      <a th:href="${localizacao_url}" style="color: #7A0E14; font-weight: bold;">Ver no Google Maps</a></p>
+    </div>
+
+    <p style="margin-top: 24px;">Guarde este e-mail com as instruções do seu atendimento no Terreiro de Rei Sebastião.</p>
+  </div>
+  <div class="footer">
+    <p>Terreiro de Rei Sebastião - Que a luz dos nossos ancestrais guie seus caminhos.</p>
+  </div>
+</div>
+</body>
+</html>
