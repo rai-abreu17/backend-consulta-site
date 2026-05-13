@@ -279,7 +279,7 @@ SELECT
   '00000000-0000-0000-0000-000000000301',
   s.id,
   c.id,
-  'CONFIRMED',
+  'ONLINE',
   ((CURRENT_DATE + 1) + TIME '14:00') AT TIME ZONE 'America/Fortaleza',
   ((CURRENT_DATE + 1) + TIME '15:00') AT TIME ZONE 'America/Fortaleza',
   'CONFIRMED',
