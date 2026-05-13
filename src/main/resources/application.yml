@@ -58,7 +58,7 @@ mp:
 
 # ── PII (LGPD) ────────────────────────────────────────
 pii:
-  key: ${PII_SECRET_KEY:${PII_KEY}}
+  key: ${PII_SECRET_KEY:${PII_KEY:}}
   hash-salt: ${PII_HASH_SALT}
 
 # ── CORS ──────────────────────────────────────────────
