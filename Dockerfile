@@ -11,4 +11,4 @@ WORKDIR /app
 
 COPY --from=build /app/target/*.jar /app/target/app.jar
 
-CMD ["sh", "-c", "java -Dserver.port=${PORT:-8080} ${JAVA_OPTS} -jar /app/target/app.jar"]
+CMD ["sh", "-c", "java -Dserver.port=${PORT:-8080} -Dspring.profiles.active=${SPRING_PROFILES_ACTIVE:-prod} ${JAVA_OPTS} -jar /app/target/app.jar"]
