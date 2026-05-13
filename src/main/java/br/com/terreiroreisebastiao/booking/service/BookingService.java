@@ -15,11 +15,10 @@ import br.com.terreiroreisebastiao.payment.service.MercadoPagoPreferenceService;
 import br.com.terreiroreisebastiao.shared.crypto.PiiCipher;
 import br.com.terreiroreisebastiao.shared.error.ApiException;
 import br.com.terreiroreisebastiao.shared.error.ErrorCode;
-import org.springframework.dao.DataIntegrityViolationException;
-import org.redisson.api.RLock;
-import org.redisson.api.RedissonClient;
+import br.com.terreiroreisebastiao.shared.lock.LockService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
@@ -32,7 +31,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.TimeUnit;
 
 @Service
 public class BookingService {
@@ -40,19 +38,14 @@ public class BookingService {
     private static final Logger log = LoggerFactory.getLogger(BookingService.class);
     private static final long HOLD_RESERVA_MINUTOS = 10L;
     private static final long LOCK_WAIT_TIME_SECONDS = 1L;
-    private static final long LOCK_LEASE_TIME_SECONDS = 30L;
 
-    /**
-     * Wrapper retornado por {@link #criarReservaPendente} contendo o booking criado
-     * e a URL de checkout gerada pelo Mercado Pago.
-     */
     public record ResultadoReservaPendente(Booking booking, String checkoutUrl) {}
 
     private final BookingRepository bookingRepository;
     private final MarcacaoRepository marcacaoRepository;
     private final ServicoRepository servicoRepository;
     private final CustomerRepository customerRepository;
-    private final RedissonClient redissonClient;
+    private final LockService lockService;
     private final PiiCipher piiCipher;
     private final MercadoPagoPreferenceService mercadoPagoPreferenceService;
 
@@ -60,52 +53,16 @@ public class BookingService {
                           MarcacaoRepository marcacaoRepository,
                           ServicoRepository servicoRepository,
                           CustomerRepository customerRepository,
-                          RedissonClient redissonClient,
+                          LockService lockService,
                           PiiCipher piiCipher,
                           MercadoPagoPreferenceService mercadoPagoPreferenceService) {
         this.bookingRepository = bookingRepository;
         this.marcacaoRepository = marcacaoRepository;
         this.servicoRepository = servicoRepository;
         this.customerRepository = customerRepository;
-        this.redissonClient = redissonClient;
+        this.lockService = lockService;
         this.piiCipher = piiCipher;
         this.mercadoPagoPreferenceService = mercadoPagoPreferenceService;
-    }
-
-    /**
-     * Tenta executar uma ação protegida por um lock distribuído no Redis.
-     * Utiliza o Redisson para prevenir condições de corrida assíncronas.
-     *
-     * @param lockKey Chave única para o lock (ex: booking:123 ou slot:2026-02-14)
-     * @param waitTime Segundos máximos esperando o lock
-     * @param leaseTime Segundos máximos segurando o lock (TTL)
-     * @param action A função a ser executada se o lock for adquirido
-     * @return true se executou com sucesso, false se o lock já estava tomado.
-     */
-    public boolean executeWithLock(String lockKey, long waitTime, long leaseTime, Runnable action) {
-        RLock lock = redissonClient.getLock(lockKey);
-        boolean isLocked = false;
-        try {
-            log.info("Tentando adquirir lock distribuído. chave={} wait={}s lease={}s", lockKey, waitTime, leaseTime);
-            isLocked = lock.tryLock(waitTime, leaseTime, TimeUnit.SECONDS);
-            if (isLocked) {
-                log.info("Lock distribuído adquirido. chave={}", lockKey);
-                action.run();
-                return true;
-            } else {
-                log.warn("Falha ao adquirir lock distribuído. chave={}", lockKey);
-                return false;
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            log.error("Thread interrompida enquanto aguardava lock distribuído. chave={}", lockKey, e);
-            return false;
-        } finally {
-            if (isLocked && lock.isHeldByCurrentThread()) {
-                lock.unlock();
-                log.info("Lock distribuído liberado. chave={}", lockKey);
-            }
-        }
     }
 
     @Transactional
@@ -126,7 +83,7 @@ public class BookingService {
         final Booking[] bookingCriado = new Booking[1];
 
         try {
-            boolean executado = executeWithLock(chaveLock, LOCK_WAIT_TIME_SECONDS, LOCK_LEASE_TIME_SECONDS, () -> {
+            boolean executado = lockService.executeWithLock(chaveLock, LOCK_WAIT_TIME_SECONDS, () -> {
                 if (marcacaoRepository.existsOverlappingActiveBooking(inicioNormalizado, fimEm)) {
                     throw new SlotUnavailableException("O horário selecionado já está reservado por outro consulente.");
                 }
@@ -145,13 +102,8 @@ public class BookingService {
                 );
 
                 bookingCriado[0] = bookingRepository.save(booking);
-                log.info(
-                        "Booking em hold criado. bookingId={} servicoId={} inicioEm={} holdExpiraEm={}",
-                        bookingCriado[0].getId(),
-                        servicoId,
-                        inicioNormalizado,
-                        expiracaoReservaEm
-                );
+                log.info("Booking em hold criado. bookingId={} servicoId={} inicioEm={} holdExpiraEm={}",
+                        bookingCriado[0].getId(), servicoId, inicioNormalizado, expiracaoReservaEm);
             });
 
             if (!executado || bookingCriado[0] == null) {
@@ -175,26 +127,13 @@ public class BookingService {
                 .orElseThrow(() -> new ApiException(ErrorCode.RESOURCE_NOT_FOUND, "Agendamento não encontrado."));
     }
 
-    /**
-     * Inicia o processo de checkout e reserva do horário (slot).
-     * O critério de aceite exige que seja impossível criar duas reservas para o 
-     * mesmo slotId (horário/serviço) enquanto o lock do Redis estiver ativo.
-     *
-     * @param slotId Identificador único do slot (ex: "serviceId:2026-05-10T15:00:00Z")
-     * @param servico O serviço solicitado
-     * @param consulente O cliente que está marcando
-     * @param modalidade A modalidade escolhida
-     * @param inicioEm Início do agendamento
-     * @param fimEm Fim do agendamento
-     * @return O agendamento criado
-     */
     @Transactional
-    public Booking initiateCheckout(String slotId, Servico servico, Customer consulente, 
+    public Booking initiateCheckout(String slotId, Servico servico, Customer consulente,
                                     Modalidade modalidade, OffsetDateTime inicioEm, OffsetDateTime fimEm) {
         String chaveLock = montarChaveLock(servico.getId(), inicioEm);
         final Booking[] bookingCriado = new Booking[1];
 
-        boolean executado = executeWithLock(chaveLock, LOCK_WAIT_TIME_SECONDS, LOCK_LEASE_TIME_SECONDS, () -> {
+        boolean executado = lockService.executeWithLock(chaveLock, LOCK_WAIT_TIME_SECONDS, () -> {
             if (marcacaoRepository.existsOverlappingActiveBooking(inicioEm, fimEm)) {
                 throw new SlotUnavailableException("O horário selecionado já está reservado por outro consulente.");
             }
@@ -220,35 +159,27 @@ public class BookingService {
 
         return bookingCriado[0];
     }
-    
-    /**
-     * Exemplo de processamento de Webhook onde o lock é feito por bookingId
-     * conforme a Spec original (workflow gerar-redis-lock).
-     */
+
     @Transactional
     public void processPaymentWebhook(UUID bookingId) {
         String lockKey = "booking:" + bookingId;
-        
-        boolean executed = executeWithLock(lockKey, 3, 30, () -> {
+
+        boolean executed = lockService.executeWithLock(lockKey, 3, () -> {
             Booking booking = bookingRepository.findByIdForUpdate(bookingId)
                 .orElseThrow(() -> new ApiException(ErrorCode.RESOURCE_NOT_FOUND, "Agendamento não encontrado."));
-                
+
             if (booking.getStatus() == BookingStatus.PENDING_PAYMENT) {
                 booking.setStatus(BookingStatus.CONFIRMED);
                 booking.setExpiracaoReservaEm(null);
                 bookingRepository.save(booking);
             }
         });
-        
+
         if (!executed) {
             throw new ApiException(ErrorCode.EXTERNAL_TIMEOUT, "Não foi possível processar o webhook no momento (Lock timeout).");
         }
     }
 
-    /**
-     * Lista as marcações com filtros opcionais.
-     * Utilizado pelo painel administrativo (blindado).
-     */
     @Transactional(readOnly = true)
     public Page<BookingAdminDto> listarMarcacoesAdmin(BookingStatus status,
                                                       OffsetDateTime dataInicio,
@@ -257,6 +188,34 @@ public class BookingService {
         log.info("Buscando marcações administrativas. Status: {}, Inicio: {}, Fim: {}, Página: {}", status, dataInicio, dataFim, pageable);
         return bookingRepository.findAll(criarFiltroMarcacoesAdmin(status, dataInicio, dataFim), pageable)
                 .map(BookingAdminDto::fromEntity);
+    }
+
+    @Transactional
+    public void alterarEstadoMarcacao(UUID bookingId, BookingStatus novoStatus, String notasAdmin) {
+        String lockKey = "booking:" + bookingId;
+
+        boolean executed = lockService.executeWithLock(lockKey, 3, () -> {
+            Booking booking = bookingRepository.findByIdForUpdate(bookingId)
+                .orElseThrow(() -> new ApiException(ErrorCode.RESOURCE_NOT_FOUND, "Agendamento não encontrado."));
+
+            validarTransicaoAdministrativa(booking.getStatus(), novoStatus);
+            log.info("Alterando estado do agendamento {}. Anterior: {}, Novo: {}", bookingId, booking.getStatus(), novoStatus);
+            booking.setStatus(novoStatus);
+
+            if (notasAdmin != null && !notasAdmin.isBlank()) {
+                booking.setNotasAdmin(notasAdmin);
+            }
+
+            if (novoStatus != BookingStatus.PENDING_PAYMENT) {
+                booking.setExpiracaoReservaEm(null);
+            }
+
+            bookingRepository.save(booking);
+        });
+
+        if (!executed) {
+            throw new ApiException(ErrorCode.EXTERNAL_TIMEOUT, "Não foi possível alterar o estado da marcação no momento (Lock timeout).");
+        }
     }
 
     private Specification<Booking> criarFiltroMarcacoesAdmin(BookingStatus status,
@@ -279,38 +238,6 @@ public class BookingService {
         }
 
         return specification;
-    }
-
-    /**
-     * Altera o estado de uma marcação (Agendamento/Tiragem) e adiciona notas administrativas.
-     * Segue a regra de negócio centralizada.
-     */
-    @Transactional
-    public void alterarEstadoMarcacao(UUID bookingId, BookingStatus novoStatus, String notasAdmin) {
-        String lockKey = "booking:" + bookingId;
-
-        boolean executed = executeWithLock(lockKey, 3, 30, () -> {
-            Booking booking = bookingRepository.findByIdForUpdate(bookingId)
-                .orElseThrow(() -> new ApiException(ErrorCode.RESOURCE_NOT_FOUND, "Agendamento não encontrado."));
-
-            validarTransicaoAdministrativa(booking.getStatus(), novoStatus);
-            log.info("Alterando estado do agendamento {}. Anterior: {}, Novo: {}", bookingId, booking.getStatus(), novoStatus);
-            booking.setStatus(novoStatus);
-
-            if (notasAdmin != null && !notasAdmin.isBlank()) {
-                booking.setNotasAdmin(notasAdmin);
-            }
-
-            if (novoStatus != BookingStatus.PENDING_PAYMENT) {
-                booking.setExpiracaoReservaEm(null);
-            }
-
-            bookingRepository.save(booking);
-        });
-
-        if (!executed) {
-            throw new ApiException(ErrorCode.EXTERNAL_TIMEOUT, "Não foi possível alterar o estado da marcação no momento (Lock timeout).");
-        }
     }
 
     private Servico buscarServicoPublicadoOuFalhar(UUID servicoId) {

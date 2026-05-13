@@ -23,7 +23,6 @@
         <postgresql.version>42.7.7</postgresql.version>
         <jjwt.version>0.12.6</jjwt.version>
         <tink.version>1.13.0</tink.version>
-        <redisson.version>3.30.0</redisson.version>
         <springdoc.version>2.5.0</springdoc.version>
     </properties>
 
@@ -86,15 +85,6 @@
         <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-database-postgresql</artifactId>
-        </dependency>
-
-        <!-- =========================================================
-             Redis — Redisson (locking distribuído)
-             ========================================================= -->
-        <dependency>
-            <groupId>org.redisson</groupId>
-            <artifactId>redisson-spring-boot-starter</artifactId>
-            <version>${redisson.version}</version>
         </dependency>
 
         <!-- =========================================================

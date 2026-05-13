@@ -7,10 +7,6 @@ spring:
     username: ${DB_USER:${SPRING_DATASOURCE_USERNAME:}}
     password: ${DB_PASSWORD:${SPRING_DATASOURCE_PASSWORD:}}
 
-  data:
-    redis:
-      url: ${REDIS_URL:${SPRING_DATA_REDIS_URL:}}
-
   # ── JPA / Hibernate ──────────────────────────────────
   jpa:
     hibernate:

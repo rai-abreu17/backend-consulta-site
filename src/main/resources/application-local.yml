@@ -1,17 +1,9 @@
 spring:
-  autoconfigure:
-    exclude: org.redisson.spring.starter.RedissonAutoConfigurationV2
-
   # ── DataSource local ─────────────────────────────────
   datasource:
     url: ${DB_URL:${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/terreiro}}
     username: ${DB_USER:${SPRING_DATASOURCE_USERNAME:app}}
     password: ${DB_PASSWORD:${SPRING_DATASOURCE_PASSWORD:app}}
-
-  # ── Redis local ──────────────────────────────────────
-  data:
-    redis:
-      url: ${REDIS_URL:${SPRING_DATA_REDIS_URL:redis://localhost:6379}}
 
 # ── JWT (chave de desenvolvimento — NÃO usar em produção) ──
 jwt:

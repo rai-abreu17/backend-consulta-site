@@ -12,10 +12,9 @@ import br.com.terreiroreisebastiao.payment.repository.EventoWebhookPagamentoRepo
 import br.com.terreiroreisebastiao.payment.repository.PagamentoRepository;
 import br.com.terreiroreisebastiao.shared.error.ApiException;
 import br.com.terreiroreisebastiao.shared.error.ErrorCode;
+import br.com.terreiroreisebastiao.shared.lock.LockService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.redisson.api.RLock;
-import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -38,7 +37,6 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
 import java.util.Locale;
 import java.util.UUID;
-import java.util.concurrent.TimeUnit;
 
 @Service
 public class PaymentProcessingService {
@@ -46,14 +44,13 @@ public class PaymentProcessingService {
     private static final Logger log = LoggerFactory.getLogger(PaymentProcessingService.class);
     private static final String PROVEDOR = "MERCADO_PAGO";
     private static final long LOCK_WAIT_SECONDS = 3L;
-    private static final long LOCK_LEASE_SECONDS = 30L;
 
     private final WebhookSignatureVerifier signatureVerifier;
     private final EventoWebhookPagamentoRepository eventoRepository;
     private final PagamentoRepository pagamentoRepository;
     private final BookingRepository bookingRepository;
     private final NotificationService notificationService;
-    private final RedissonClient redissonClient;
+    private final LockService lockService;
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
     private final String mercadoPagoAccessToken;
@@ -65,7 +62,7 @@ public class PaymentProcessingService {
                                     PagamentoRepository pagamentoRepository,
                                     BookingRepository bookingRepository,
                                     NotificationService notificationService,
-                                    RedissonClient redissonClient,
+                                    LockService lockService,
                                     ObjectMapper objectMapper,
                                     @Value("${mp.access-token:}") String mercadoPagoAccessToken,
                                     @Value("${mp.base-url:https://api.mercadopago.com}") String mercadoPagoBaseUrl,
@@ -75,7 +72,7 @@ public class PaymentProcessingService {
         this.pagamentoRepository = pagamentoRepository;
         this.bookingRepository = bookingRepository;
         this.notificationService = notificationService;
-        this.redissonClient = redissonClient;
+        this.lockService = lockService;
         this.objectMapper = objectMapper;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(5))
@@ -134,20 +131,10 @@ public class PaymentProcessingService {
 
         UUID bookingId = pagamento.getAgendamento().getId();
         String lockKey = "booking:" + bookingId;
-        RLock lock = redissonClient.getLock(lockKey);
-        boolean locked = false;
 
-        try {
-            log.info("Tentando adquirir lock do webhook. eventId={} bookingId={} chave={}", evento.getIdEvento(), bookingId, lockKey);
-            locked = lock.tryLock(LOCK_WAIT_SECONDS, LOCK_LEASE_SECONDS, TimeUnit.SECONDS);
-            if (!locked) {
-                throw new ApiException(
-                        ErrorCode.EXTERNAL_TIMEOUT,
-                        HttpStatus.INTERNAL_SERVER_ERROR,
-                        "Não foi possível sincronizar o processamento do webhook."
-                );
-            }
+        log.info("Tentando adquirir lock do webhook. eventId={} bookingId={} chave={}", evento.getIdEvento(), bookingId, lockKey);
 
+        boolean locked = lockService.executeWithLock(lockKey, LOCK_WAIT_SECONDS, () -> {
             log.info("Lock do webhook adquirido. eventId={} bookingId={} chave={}", evento.getIdEvento(), bookingId, lockKey);
 
             Booking booking = bookingRepository.findByIdForUpdate(bookingId)
@@ -169,18 +156,16 @@ public class PaymentProcessingService {
 
             log.info("Webhook Mercado Pago processado. eventId={} bookingId={} paymentStatus={} bookingStatus={}",
                     evento.getIdEvento(), bookingId, pagamento.getStatus(), booking.getStatus());
-        } catch (InterruptedException ex) {
-            Thread.currentThread().interrupt();
+
+            log.info("Lock do webhook liberado. eventId={} bookingId={} chave={}", evento.getIdEvento(), bookingId, lockKey);
+        });
+
+        if (!locked) {
             throw new ApiException(
-                    ErrorCode.INTERNAL_ERROR,
+                    ErrorCode.EXTERNAL_TIMEOUT,
                     HttpStatus.INTERNAL_SERVER_ERROR,
-                    "O processamento do webhook foi interrompido."
+                    "Não foi possível sincronizar o processamento do webhook."
             );
-        } finally {
-            if (locked && lock.isHeldByCurrentThread()) {
-                lock.unlock();
-                log.info("Lock do webhook liberado. eventId={} bookingId={} chave={}", evento.getIdEvento(), bookingId, lockKey);
-            }
         }
     }
 
@@ -425,6 +410,5 @@ public class PaymentProcessingService {
         return mensagem.length() <= 500 ? mensagem : mensagem.substring(0, 500);
     }
 
-    private record WebhookRecebido(String eventId, String eventType, String resourceId) {
-    }
+    private record WebhookRecebido(String eventId, String eventType, String resourceId) {}
 }
