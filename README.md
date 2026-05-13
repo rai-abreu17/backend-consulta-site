@@ -74,6 +74,7 @@ Em producao o servico usa Redisson para locks distribuidos. Por isso, o backend 
 - `MAIL_SMTP_STARTTLS`
 - `MAIL_FROM`
 - `JWT_EXPIRATION`
+- `PII_LEGACY_KEY` (somente se precisar ler dados demo cifrados com a chave local legada)
 - `TERREIRO_ENDERECO`
 - `TERREIRO_MAPS_URL`
 - `TERREIRO_LINK_ONLINE`

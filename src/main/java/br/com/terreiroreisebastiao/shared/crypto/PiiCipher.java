@@ -6,8 +6,6 @@ import org.springframework.stereotype.Component;
 import javax.crypto.Cipher;
 import javax.crypto.Mac;
 import javax.crypto.spec.GCMParameterSpec;
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -50,6 +48,7 @@ public class PiiCipher {
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     private final SecretKeySpec chaveAes;
+    private final SecretKeySpec chaveAesLegado;
     private final byte[] saltHash;
 
     /**
@@ -60,22 +59,13 @@ public class PiiCipher {
      */
     public PiiCipher(
             @Value("${pii.key}") String chaveBase64,
+            @Value("${pii.legacy-key:}") String chaveLegadoBase64,
             @Value("${pii.hash-salt}") String saltHashTexto
     ) {
-        byte[] chaveBytes;
-        try {
-            chaveBytes = Base64.getDecoder().decode(chaveBase64);
-        } catch (IllegalArgumentException excecao) {
-            throw new CryptoException("PII_SECRET_KEY inválida: valor Base64 malformado.", excecao);
-        }
-
-        if (chaveBytes.length != TAMANHO_CHAVE_AES_256_BYTES) {
-            throw new CryptoException(
-                    "PII_SECRET_KEY inválida: a chave AES-GCM-256 deve ter exatamente 32 bytes após o Base64."
-            );
-        }
-
-        this.chaveAes = new SecretKeySpec(chaveBytes, ALGORITMO_AES);
+        this.chaveAes = criarChave(chaveBase64, "PII_SECRET_KEY");
+        this.chaveAesLegado = (chaveLegadoBase64 == null || chaveLegadoBase64.isBlank())
+                ? null
+                : criarChave(chaveLegadoBase64, "PII_LEGACY_KEY");
         this.saltHash = saltHashTexto.getBytes(StandardCharsets.UTF_8);
     }
 
@@ -140,18 +130,21 @@ public class PiiCipher {
                 throw new CryptoException("Ciphertext PII inválido: payload menor que o IV esperado.");
             }
 
-            byte[] iv = Arrays.copyOfRange(payload, 0, TAMANHO_IV_BYTES);
-            byte[] cifrado = Arrays.copyOfRange(payload, TAMANHO_IV_BYTES, payload.length);
+            try {
+                return descriptografarComChave(payload, chaveAes);
+            } catch (GeneralSecurityException excecaoPrincipal) {
+                if (chaveAesLegado != null) {
+                    try {
+                        return descriptografarComChave(payload, chaveAesLegado);
+                    } catch (GeneralSecurityException ignored) {
+                        // Mantem a excecao principal para indicar que o dado nao pode ser lido pela chave ativa.
+                    }
+                }
 
-            Cipher cipher = Cipher.getInstance(TRANSFORMACAO_AES_GCM);
-            cipher.init(Cipher.DECRYPT_MODE, chaveAes, new GCMParameterSpec(TAMANHO_TAG_BITS, iv));
-
-            byte[] decifrado = cipher.doFinal(cifrado);
-            return new String(decifrado, StandardCharsets.UTF_8);
+                throw new CryptoException("Falha ao descriptografar dado PII.", excecaoPrincipal);
+            }
         } catch (IllegalArgumentException excecao) {
             throw new CryptoException("Ciphertext PII inválido: Base64 malformado.", excecao);
-        } catch (GeneralSecurityException excecao) {
-            throw new CryptoException("Falha ao descriptografar dado PII.", excecao);
         }
     }
 
@@ -180,5 +173,33 @@ public class PiiCipher {
         } catch (Exception excecao) {
             throw new CryptoException("Falha ao gerar hash HMAC-SHA256 para lookup.", excecao);
         }
+    }
+
+    private SecretKeySpec criarChave(String chaveBase64, String nomeVariavel) {
+        byte[] chaveBytes;
+        try {
+            chaveBytes = Base64.getDecoder().decode(chaveBase64);
+        } catch (IllegalArgumentException excecao) {
+            throw new CryptoException(nomeVariavel + " inválida: valor Base64 malformado.", excecao);
+        }
+
+        if (chaveBytes.length != TAMANHO_CHAVE_AES_256_BYTES) {
+            throw new CryptoException(
+                    nomeVariavel + " inválida: a chave AES-GCM-256 deve ter exatamente 32 bytes após o Base64."
+            );
+        }
+
+        return new SecretKeySpec(chaveBytes, ALGORITMO_AES);
+    }
+
+    private String descriptografarComChave(byte[] payload, SecretKeySpec chave) throws GeneralSecurityException {
+        byte[] iv = Arrays.copyOfRange(payload, 0, TAMANHO_IV_BYTES);
+        byte[] cifrado = Arrays.copyOfRange(payload, TAMANHO_IV_BYTES, payload.length);
+
+        Cipher cipher = Cipher.getInstance(TRANSFORMACAO_AES_GCM);
+        cipher.init(Cipher.DECRYPT_MODE, chave, new GCMParameterSpec(TAMANHO_TAG_BITS, iv));
+
+        byte[] decifrado = cipher.doFinal(cifrado);
+        return new String(decifrado, StandardCharsets.UTF_8);
     }
 }
